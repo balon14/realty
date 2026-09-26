@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
-"""
-Парсер квартир с r.onliner.by/pk/
-Сохраняет результат в CSV рядом со скриптом (или в указанную папку).
-"""
-
 import requests
 import time
 import csv
 import os
+import re
 from datetime import datetime
 
 BASE_URL = "https://pk.api.onliner.by/search/apartments"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/html, */*",
+}
+
+# Регулярка: "Панельный дом 2015 года", "Кирпичный дом 1987 г." и т.п.
+YEAR_RE = re.compile(
+    r"(панельн\w*|кирпичн\w*|монолитн\w*|блочн\w*|каркасн\w*|деревянн\w*)?\s*"
+    r"дом\s+(\d{4})\s*(?:года|г\.?)?",
+    re.IGNORECASE,
+)
+
 
 def get_apartments(page=1, **filters):
     params = {"page": page, **filters}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-    }
-    response = requests.get(BASE_URL, params=params, headers=headers, timeout=20)
+    response = requests.get(BASE_URL, params=params, headers=HEADERS, timeout=20)
     response.raise_for_status()
     return response.json()
+
 
 def parse_all(max_pages=None, **filters):
     first = get_apartments(page=1, **filters)
@@ -38,6 +43,72 @@ def parse_all(max_pages=None, **filters):
         time.sleep(0.6)
 
     return all_aparts
+
+
+def fetch_building_info(url: str) -> tuple[str | None, int | None]:
+    """
+    Парсит HTML страницы объявления.
+    Возвращает (тип_дома, год_постройки) или (None, None).
+    """
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        html = resp.text
+
+        # Ищем все пункты опций
+        options = re.findall(
+            r'class="apartment-options__item"[^>]*>([^<]+)',
+            html,
+        )
+        for opt in options:
+            opt = opt.strip()
+            m = YEAR_RE.search(opt)
+            if m:
+                building_type = (m.group(1) or "").strip().lower() or None
+                year = int(m.group(2))
+                # Нормализуем тип
+                if building_type:
+                    if "панел" in building_type:
+                        building_type = "панельный"
+                    elif "кирпич" in building_type:
+                        building_type = "кирпичный"
+                    elif "монолит" in building_type:
+                        building_type = "монолитный"
+                    elif "блоч" in building_type:
+                        building_type = "блочный"
+                    elif "каркас" in building_type:
+                        building_type = "каркасный"
+                    elif "дерев" in building_type:
+                        building_type = "деревянный"
+                return building_type, year
+
+        # Запасной вариант: просто год рядом со словом "дом"
+        m2 = re.search(r"дом\s+(\d{4})", html, re.IGNORECASE)
+        if m2:
+            return None, int(m2.group(1))
+
+    except Exception as e:
+        print(f"  ⚠️ не удалось получить год для {url}: {e}")
+    return None, None
+
+
+def enrich_with_building_year(apartments: list, delay: float = 0.5) -> list:
+    """Добавляет building_year и building_type к каждому объявлению."""
+    total = len(apartments)
+    print(f"\nПолучаю год постройки для {total} объявлений...")
+
+    for i, apt in enumerate(apartments, 1):
+        url = apt.get("url")
+        if not url:
+            continue
+        if i % 20 == 0 or i == total:
+            print(f"  {i}/{total}...")
+        building_type, year = fetch_building_info(url)
+        apt["building_type"] = building_type
+        apt["building_year"] = year
+        time.sleep(delay)
+
+    return apartments
 
 def flatten_apartment(apt: dict) -> dict:
     price = apt.get("price", {}) or {}
@@ -66,6 +137,8 @@ def flatten_apartment(apt: dict) -> dict:
         "longitude": location.get("longitude"),
         "seller_type": seller.get("type"),
         "resale": apt.get("resale"),
+        "building_type": apt.get("building_type"),   # ← новое
+        "building_year": apt.get("building_year"),   # ← новое
         "photo": apt.get("photo"),
         "created_at": apt.get("created_at"),
         "last_time_up": apt.get("last_time_up"),
@@ -73,18 +146,17 @@ def flatten_apartment(apt: dict) -> dict:
         "auction_bid_currency": auction.get("currency"),
     }
 
+
 def save_to_csv(apartments: list, output_path: str = None) -> str:
     if not apartments:
         print("Нет данных для сохранения")
         return None
 
     if output_path is None:
-        # Сохраняем рядом со скриптом
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_dir = os.path.dirname(os.path.abspath(file))
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(script_dir, f"apartments_{timestamp}.csv")
 
-    # Создаём папку, если нужно
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
     rows = [flatten_apartment(apt) for apt in apartments]
@@ -101,11 +173,9 @@ def save_to_csv(apartments: list, output_path: str = None) -> str:
     return abs_path
 
 
-if __name__ == "__main__":
+if name == "main":
     # ========== НАСТРОЙКИ ==========
     filters = {
-        "price[min]": 50000,
-        "price[max]": 120000,
         "currency": "usd",
         "number_of_rooms[]": [1, 2],
         # область Минска (можно убрать, если нужны все объявления)
@@ -123,5 +193,8 @@ if __name__ == "__main__":
     apartments = parse_all(max_pages=MAX_PAGES, **filters)
     print(f"Найдено объявлений: {len(apartments)}")
 
-    # Сохраняем в CSV рядом со скриптом
+    # Получаем год постройки (запросы на каждую страницу)
+    apartments = enrich_with_building_year(apartments, delay=0.5)
+
+    # Сохраняем в CSV
     save_to_csv(apartments, r"D:\Pet_projekts\realty\realty\r.csv")

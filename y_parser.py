@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Парсер квартир realt.by
-Фильтр: 1–2 комнатные, 50 000–120 000 USD, Минск.
-CSV сохраняется в ту же папку, где лежит скрипт.
-"""
-
 import sys
 import os
 import re
