@@ -173,7 +173,7 @@ def save_to_csv(apartments: list, output_path: str = None) -> str:
     return abs_path
 
 
-if name == "main":
+if __name__ == "__main__":
     # ========== НАСТРОЙКИ ==========
     filters = {
         "currency": "usd",

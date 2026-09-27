@@ -205,7 +205,7 @@ def main():
 
     script_dir = get_script_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = os.path.join(script_dir, f"realt.csv")
+    output_file = os.path.join(script_dir, f"y.csv")
 
     print(f"Папка проекта: {script_dir}")
     print(f"Файл будет сохранён как: {output_file}")
