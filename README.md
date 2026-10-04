@@ -19,3 +19,6 @@
 
 
 ![alt text](image.png)
+
+CI/CD в Jenkins
+![alt text](image-2.png)
